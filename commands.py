@@ -26,12 +26,11 @@ def make_command_pool(inputChunk, debug):
     queueFamilyIndices = queue_families.find_queue_families(
         device = inputChunk.physicalDevice,
         instance = inputChunk.instance,
-        surface = inputChunk.surface,
-        debug = debug
+        surface = inputChunk.surface
     )
 
     poolInfo = VkCommandPoolCreateInfo(
-        queueFamilyIndex=queueFamilyIndices.graphicsFamily,
+        queueFamilyIndex=queueFamilyIndices.graphics_family,
         flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT
     )
 

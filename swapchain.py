@@ -1,10 +1,8 @@
 from config import *
-import logging
 import queue_families
 import frame
 
 class SwapChainSupportDetails:
-
 
     def __init__(self):
         
@@ -13,7 +11,6 @@ class SwapChainSupportDetails:
         self.presentModes = None
 
 class SwapChainBundle:
-
 
     def __init__(self):
         
@@ -129,11 +126,11 @@ def create_swapchain(instance, logicalDevice, physicalDevice, surface, width, he
         ) VULKAN_HPP_NOEXCEPT
     """
 
-    indices = queue_families.find_queue_families(physicalDevice, instance, surface, debug)
+    indices = queue_families.find_queue_families(physicalDevice, instance, surface)
     queueFamilyIndices = [
-        indices.graphicsFamily, indices.presentFamily
+        indices.graphics_family, indices.present_family
     ]
-    if (indices.graphicsFamily != indices.presentFamily):
+    if (indices.graphics_family != indices.present_family):
         imageSharingMode = VK_SHARING_MODE_CONCURRENT
         queueFamilyIndexCount = 2
         pQueueFamilyIndices = queueFamilyIndices

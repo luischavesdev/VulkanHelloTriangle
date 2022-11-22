@@ -1,6 +1,7 @@
 from config import *
 
-import device
+import queue_families
+
 import swapchain
 import frame
 import pipeline
@@ -12,26 +13,41 @@ class Program:
     def __init__(self):
         # Throughout the code, vk stands for Vulkan
 
-        # Vulkan is OS agnostic, so it works with a custom surface named vk_surface. That said, we still need a OS based window, so 
-        # we use a library that will give us that type of functionality, such as GLFW for example. We'll then use vulkan's functions to create a vk_surface from 
-        # the GLFW window.
-
         self.program_name = "test_name"
         self.window = None 
         self.window_width = 640
         self.window_height = 480
         self.vk_instance = None  
         self.vk_surface = None
-
+        self.physical_device = None
+        self.logical_device = None
+        self.queue_family_indices = None
+        self.graphics_queue = None
+        self.present_queue = None
         self.build_glfw_window(self.window_width, self.window_height)
 
         # Makes a Vulkan Instance, similar to an OpenGL Context
-        self.vk_instance = self.make_instance()
+        self.make_instance()
 
         # Makes a vk_surface
         self.make_surface()
 
+        # Gets reference to first physical device supported
+        self.choose_physical_device()
+
+        # Setting up queue indices. Store indices from first graphics and or present queue found. Queues are created along with logcal device
+        self.queue_family_indices = queue_families.find_queue_families(self.physical_device, self.vk_instance, self.vk_surface)
+
+        # Creates the logical device and associated queues
+        self.create_logical_device()
+
+        # Caching individual queues
+        self.graphics_queue = vkGetDeviceQueue(self.logical_device, self.queue_family_indices.graphics_family, 0)
+        self.present_queue = vkGetDeviceQueue(self.logical_device, self.queue_family_indices.present_family, 0)
+
+        # Makes a vk logical device
         self.make_device()
+
         self.make_pipeline()
         self.finalize_setup()
 
@@ -55,21 +71,10 @@ class Program:
         # That said, we can just drop down to the base version to ensure compatibility
         version = VK_MAKE_VERSION(1, 1, 0)
 
-        # App info is needed for create info down below
-        appInfo = VkApplicationInfo(
-            pApplicationName = self.program_name,
-            applicationVersion = version,
-            pEngineName = self.program_name,
-            engineVersion = version,
-            apiVersion = version
-        )
-
-        # Layers are a concept that Vulkan uses to provide additional functionality, mostly related to debbuging. This is done since Vulkan strives to have as little overhead as possible,
-        # so if the user wants any feature, they need to explicitly state so. Since we are writting a simple program, we will choose to opt-out.
-        # A similar concept is that of extensions. In this case though, for now, we only need to make sure our system supports the VK_KHR_surface, since GLFW will need that to create a
-        # vk_surface
+        appInfo = VkApplicationInfo(pApplicationName = self.program_name, applicationVersion = version, pEngineName = self.program_name, engineVersion = version, apiVersion = version)
         layers = []
-        # get extensions needed by GLFW
+
+        #In our simple case, we only need to make sure our system supports the VK_KHR_surface extension, since GLFW will need that to create a vk_surface
         extensions = glfw.get_required_instance_extensions()
 
         # Get supported extensions
@@ -82,15 +87,14 @@ class Program:
                 return None
                 
         # Create info is needed for instance creation down below
-        createInfo = VkInstanceCreateInfo(pApplicationInfo = appInfo, enabledLayerCount = len(layers), ppEnabledLayerNames = layers, 
+        create_info = VkInstanceCreateInfo(pApplicationInfo = appInfo, enabledLayerCount = len(layers), ppEnabledLayerNames = layers, 
             enabledExtensionCount = len(extensions), ppEnabledExtensionNames = extensions)
 
-        # Creating and instance can raise an exception
+        # Creating an instance can raise an exception
         try:
-            return vkCreateInstance(createInfo, None)
+            self.vk_instance = vkCreateInstance(create_info, None)
         except:
-            print("ERROR CREATING INSTANCE!")
-            return None
+            print("ERROR: CREATING INSTANCE!")
 
     def make_surface(self):
         # To create a surface from a window, we will need to use a glfw function that instead of returning the surface, stores it in a variable we pass as argument.
@@ -98,29 +102,53 @@ class Program:
 
         # Creating and checking vk_surface
         result =  glfw.create_window_surface(self.vk_instance, self.window, None, c_style_pointer) 
-        if result == VK_SUCCESS:
-            print("Successfully abstracted glfw's surface for vulkan")
+        if result != VK_SUCCESS:
+            print("ERROR CREATING VULKAN SURFACE!")
         
         # Storing vk_surface
         self.vk_surface = c_style_pointer[0]
     
+    def choose_physical_device(self):
+        # Get all available devices
+        available_devices = vkEnumeratePhysicalDevices(self.vk_instance)
+
+        # Return the first device that supports our required extension
+        for device in available_devices:
+
+            supported_extensions = [extension.extensionName for extension in vkEnumerateDeviceExtensionProperties(device, None)]
+
+            # The only device extension we need to make sure is available is VK_KHR_SWAPCHAIN_EXTENSION_NAME
+            if VK_KHR_SWAPCHAIN_EXTENSION_NAME in supported_extensions:
+                self.physical_device = device
+            else:
+                print("ERROR: Device Extension is NOT supported!")
+
+    def create_logical_device(self):
+
+        # We need to make sure to create the smallest ammount of queues needed, since some family queues can be multipurpose 
+        queue_create_info = []
+        unique_indices = self.queue_family_indices.get_unique_indices()
+        for index in unique_indices:
+            queue_create_info.append(
+                VkDeviceQueueCreateInfo(queueFamilyIndex = index, queueCount = 1, pQueuePriorities = [1.0,])
+            )
+
+        # Setting up the rest of the info needed to create the device
+        device_features = VkPhysicalDeviceFeatures()
+        enabled_layers = []
+        device_extensions = [VK_KHR_SWAPCHAIN_EXTENSION_NAME]
+
+        # Creating the info package
+        create_info = VkDeviceCreateInfo(queueCreateInfoCount = len(queue_create_info), pQueueCreateInfos = queue_create_info, enabledExtensionCount = len(device_extensions), 
+            ppEnabledExtensionNames = device_extensions, pEnabledFeatures = [device_features,], enabledLayerCount = len(enabled_layers), ppEnabledLayerNames = enabled_layers)
+
+        # Finally creating the logical device
+        self.logical_device = vkCreateDevice(self.physical_device, [create_info,], None)
+
     def make_device(self):
 
-        self.physicalDevice = device.choose_physical_device(self.vk_instance, True)
-        self.device = device.create_logical_device(
-            physicalDevice = self.physicalDevice, instance = self.vk_instance, 
-            surface = self.vk_surface, debug = True
-        )
-        queues = device.get_queues(
-            physicalDevice = self.physicalDevice, logicalDevice = self.device, 
-            instance = self.vk_instance, surface = self.vk_surface,
-            debug = True
-        )
-        self.graphicsQueue = queues[0]
-        self.presentQueue = queues[1]
-        
         bundle = swapchain.create_swapchain(
-            self.vk_instance, self.device, self.physicalDevice, self.vk_surface,
+            self.vk_instance, self.logical_device, self.physical_device, self.vk_surface,
             self.window_width, self.window_height, True
         )
 
@@ -132,11 +160,11 @@ class Program:
     def make_pipeline(self):
 
         inputBundle = pipeline.InputBundle(
-            device = self.device,
+            device = self.logical_device,
             swapchainImageFormat = self.swapchainFormat,
             swapchainExtent = self.swapchainExtent,
-            vertexFilepath = "C:/Users/PC/Desktop/finished/shaders/vert.spv",
-            fragmentFilepath = "C:/Users/PC/Desktop/finished/shaders/frag.spv"
+            vertexFilepath = "shaders/vert.spv",
+            fragmentFilepath = "shaders/frag.spv"
         )
 
         outputBundle = pipeline.create_graphics_pipeline(inputBundle, True)
@@ -148,7 +176,7 @@ class Program:
     def finalize_setup(self):
 
         framebufferInput = framebuffer.framebufferInput()
-        framebufferInput.device = self.device
+        framebufferInput.device = self.logical_device
         framebufferInput.renderpass = self.renderpass
         framebufferInput.swapchainExtent = self.swapchainExtent
         framebuffer.make_framebuffers(
@@ -156,8 +184,8 @@ class Program:
         )
 
         commandPoolInput = commands.commandPoolInputChunk()
-        commandPoolInput.device = self.device
-        commandPoolInput.physicalDevice = self.physicalDevice
+        commandPoolInput.device = self.logical_device
+        commandPoolInput.physicalDevice = self.physical_device
         commandPoolInput.surface = self.vk_surface
         commandPoolInput.instance = self.vk_instance
         self.commandPool = commands.make_command_pool(
@@ -165,16 +193,16 @@ class Program:
         )
 
         commandbufferInput = commands.commandbufferInputChunk()
-        commandbufferInput.device = self.device
+        commandbufferInput.device = self.logical_device
         commandbufferInput.commandPool = self.commandPool
         commandbufferInput.frames = self.swapchainFrames
         self.mainCommandbuffer = commands.make_command_buffers(
             commandbufferInput, True
         )
 
-        self.inFlightFence = sync.make_fence(self.device, True)
-        self.imageAvailable = sync.make_semaphore(self.device, True)
-        self.renderFinished = sync.make_semaphore(self.device, True)
+        self.inFlightFence = sync.make_fence(self.logical_device, True)
+        self.imageAvailable = sync.make_semaphore(self.logical_device, True)
+        self.renderFinished = sync.make_semaphore(self.logical_device, True)
 
     def record_draw_commands(self, commandBuffer, imageIndex):
 
@@ -214,19 +242,19 @@ class Program:
     def render(self):
 
         #grab instance procedures
-        vkAcquireNextImageKHR = vkGetDeviceProcAddr(self.device, 'vkAcquireNextImageKHR')
-        vkQueuePresentKHR = vkGetDeviceProcAddr(self.device, 'vkQueuePresentKHR')
+        vkAcquireNextImageKHR = vkGetDeviceProcAddr(self.logical_device, 'vkAcquireNextImageKHR')
+        vkQueuePresentKHR = vkGetDeviceProcAddr(self.logical_device, 'vkQueuePresentKHR')
 
         vkWaitForFences(
-            device = self.device, fenceCount = 1, pFences = [self.inFlightFence,], 
+            device = self.logical_device, fenceCount = 1, pFences = [self.inFlightFence,], 
             waitAll = VK_TRUE, timeout = 1000000000
         )
         vkResetFences(
-            device = self.device, fenceCount = 1, pFences = [self.inFlightFence,]
+            device = self.logical_device, fenceCount = 1, pFences = [self.inFlightFence,]
         )
 
         imageIndex = vkAcquireNextImageKHR(
-            device = self.device, swapchain = self.swapchain, timeout = 1000000000, 
+            device = self.logical_device, swapchain = self.swapchain, timeout = 1000000000, 
             semaphore = self.imageAvailable, fence = VK_NULL_HANDLE
         )
 
@@ -243,7 +271,7 @@ class Program:
 
         try:
             vkQueueSubmit(
-                queue = self.graphicsQueue, submitCount = 1, 
+                queue = self.graphics_queue, submitCount = 1, 
                 pSubmits = submitInfo, fence = self.inFlightFence
             )
         except:
@@ -254,37 +282,37 @@ class Program:
             swapchainCount = 1, pSwapchains = [self.swapchain,],
             pImageIndices = [imageIndex,]
         )
-        vkQueuePresentKHR(self.presentQueue, presentInfo)
+        vkQueuePresentKHR(self.present_queue, presentInfo)
 
     def engine_close(self):
 
-        vkDeviceWaitIdle(self.device)
+        vkDeviceWaitIdle(self.logical_device)
 
         
         print("ENGINE CLOSING!\n")
 
-        vkDestroyFence(self.device, self.inFlightFence, None)
-        vkDestroySemaphore(self.device, self.imageAvailable, None)
-        vkDestroySemaphore(self.device, self.renderFinished, None)
+        vkDestroyFence(self.logical_device, self.inFlightFence, None)
+        vkDestroySemaphore(self.logical_device, self.imageAvailable, None)
+        vkDestroySemaphore(self.logical_device, self.renderFinished, None)
 
-        vkDestroyCommandPool(self.device, self.commandPool, None)
+        vkDestroyCommandPool(self.logical_device, self.commandPool, None)
 
-        vkDestroyPipeline(self.device, self.pipeline, None)
-        vkDestroyPipelineLayout(self.device, self.pipelineLayout, None)
-        vkDestroyRenderPass(self.device, self.renderpass, None)
+        vkDestroyPipeline(self.logical_device, self.pipeline, None)
+        vkDestroyPipelineLayout(self.logical_device, self.pipelineLayout, None)
+        vkDestroyRenderPass(self.logical_device, self.renderpass, None)
         
         for frame in self.swapchainFrames:
             vkDestroyImageView(
-                device = self.device, imageView = frame.image_view, pAllocator = None
+                device = self.logical_device, imageView = frame.image_view, pAllocator = None
             )
             vkDestroyFramebuffer(
-                device = self.device, framebuffer = frame.framebuffer, pAllocator = None
+                device = self.logical_device, framebuffer = frame.framebuffer, pAllocator = None
             )
         
-        destructionFunction = vkGetDeviceProcAddr(self.device, 'vkDestroySwapchainKHR')
-        destructionFunction(self.device, self.swapchain, None)
+        destructionFunction = vkGetDeviceProcAddr(self.logical_device, 'vkDestroySwapchainKHR')
+        destructionFunction(self.logical_device, self.swapchain, None)
         vkDestroyDevice(
-            device = self.device, pAllocator = None
+            device = self.logical_device, pAllocator = None
         )
         
         destructionFunction = vkGetInstanceProcAddr(self.vk_instance, "vkDestroySurfaceKHR")
