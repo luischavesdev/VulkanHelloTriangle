@@ -45,8 +45,8 @@ class Program:
         self.graphics_queue = vkGetDeviceQueue(self.logical_device, self.queue_family_indices.graphics_family, 0)
         self.present_queue = vkGetDeviceQueue(self.logical_device, self.queue_family_indices.present_family, 0)
 
-        # Makes a vk logical device
-        self.make_device()
+        # Makes a swapchain
+        self.make_swapchain()
 
         self.make_pipeline()
         self.finalize_setup()
@@ -145,16 +145,16 @@ class Program:
         # Finally creating the logical device
         self.logical_device = vkCreateDevice(self.physical_device, [create_info,], None)
 
-    def make_device(self):
+    def make_swapchain(self):
 
         bundle = swapchain.create_swapchain(
             self.vk_instance, self.logical_device, self.physical_device, self.vk_surface,
-            self.window_width, self.window_height, True
+            self.window_width, self.window_height, self.queue_family_indices
         )
 
         self.swapchain = bundle.swapchain
         self.swapchainFrames = bundle.frames
-        self.swapchainFormat = bundle.format
+        self.swapchainFormat = bundle.color_format.format
         self.swapchainExtent = bundle.extent
 
     def make_pipeline(self):
