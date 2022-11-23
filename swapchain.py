@@ -1,12 +1,20 @@
-from config import *
-import frame
+from vulkan import *
+
+class SwapChainFrame:
+
+    def __init__(self):
+        
+        self.image = None
+        self.image_view = None
+        self.frame_buffer = None
+        self.command_buffer = None
 
 class SwapChainBundle:
 
     def __init__(self):
         
         self.swapchain = None
-        self.frames = []
+        self.frames = [] # Populated with SwapChainFrames
         self.color_format = None # Color format space
         self.extent = None # Frame sizes
         self.present_mode = None # Mode to present images, such as mailbox or fifo
@@ -74,15 +82,17 @@ def create_swapchain(instance, logicalDevice, physicalDevice, surface, width, he
     vkGetSwapchainImagesKHR = vkGetDeviceProcAddr(logicalDevice, 'vkGetSwapchainImagesKHR')
     images = vkGetSwapchainImagesKHR(logicalDevice, my_bundle.swapchain)
 
+    # Creating an Image View for each image in swapchain
     for image in images:
 
+        # Setting up info to create Image View
         components = VkComponentMapping(r = VK_COMPONENT_SWIZZLE_IDENTITY, g = VK_COMPONENT_SWIZZLE_IDENTITY, b = VK_COMPONENT_SWIZZLE_IDENTITY, a = VK_COMPONENT_SWIZZLE_IDENTITY)
         subresourceRange = VkImageSubresourceRange(aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, baseMipLevel = 0, levelCount = 1, baseArrayLayer = 0, layerCount = 1)
-
         create_info = VkImageViewCreateInfo(image = image, viewType = VK_IMAGE_VIEW_TYPE_2D, format = my_bundle.color_format.format, components = components, 
             subresourceRange = subresourceRange)
 
-        swapchain_frame = frame.SwapChainFrame()
+        # Set custom frame class
+        swapchain_frame = SwapChainFrame()
         swapchain_frame.image = image
         swapchain_frame.image_view = vkCreateImageView(device = logicalDevice, pCreateInfo = create_info, pAllocator = None) # Image view defines part of the image to be rendered
 

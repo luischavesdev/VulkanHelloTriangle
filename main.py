@@ -1,13 +1,11 @@
-from config import *
+from vulkan import *
+
+import glfw
+import glfw.GLFW as GLFW_CONSTANTS
 
 import queue_families
-
 import swapchain
-import frame
 import pipeline
-import framebuffer
-import commands
-import sync
 
 class Program:
     def __init__(self):
@@ -24,6 +22,12 @@ class Program:
         self.queue_family_indices = None
         self.graphics_queue = None
         self.present_queue = None
+        self.swapchain_bundle = None
+        self.pipeline_bundle = None
+        self.command_pool = None
+        self.main_commandbuffer = None
+        self.image_available_semaphore = None
+        self.render_finished_semaphore = None
         self.build_glfw_window(self.window_width, self.window_height)
 
         # Makes a Vulkan Instance, similar to an OpenGL Context
@@ -35,7 +39,7 @@ class Program:
         # Gets reference to first physical device supported
         self.choose_physical_device()
 
-        # Setting up queue indices. Store indices from first graphics and or present queue found. Queues are created along with logcal device
+        # Setting up queue indices. Store indices from first graphics and or present queue found. Queues are created along with logical device
         self.queue_family_indices = queue_families.find_queue_families(self.physical_device, self.vk_instance, self.vk_surface)
 
         # Creates the logical device and associated queues
@@ -46,10 +50,21 @@ class Program:
         self.present_queue = vkGetDeviceQueue(self.logical_device, self.queue_family_indices.present_family, 0)
 
         # Makes a swapchain
-        self.make_swapchain()
+        self.swapchain_bundle = swapchain.create_swapchain(self.vk_instance, self.logical_device, self.physical_device, self.vk_surface, self.window_width, 
+            self.window_height, self.queue_family_indices)
 
-        self.make_pipeline()
-        self.finalize_setup()
+        # Makes a pipeline
+        self.pipeline_bundle = pipeline.create_graphics_pipeline(self.logical_device, self.swapchain_bundle.color_format.format, self.swapchain_bundle.extent, 
+            "shaders/vert.spv", "shaders/frag.spv")
+
+        # Populates swapchain_bundle.frames with framebuffers
+        self.create_framebuffers()
+
+        # Creates commandbuffers and related structures
+        self.create_commandbuffers()
+
+        # Creates obejcts that are needed to control the flow of execution, either between GPU and CPU, or just CPU
+        self.create_sync_objects()
 
     def build_glfw_window(self, width, height):
 
@@ -144,164 +159,137 @@ class Program:
 
         # Finally creating the logical device
         self.logical_device = vkCreateDevice(self.physical_device, [create_info,], None)
-
-    def make_swapchain(self):
-
-        bundle = swapchain.create_swapchain(
-            self.vk_instance, self.logical_device, self.physical_device, self.vk_surface,
-            self.window_width, self.window_height, self.queue_family_indices
-        )
-
-        self.swapchain = bundle.swapchain
-        self.swapchainFrames = bundle.frames
-        self.swapchainFormat = bundle.color_format.format
-        self.swapchainExtent = bundle.extent
-
-    def make_pipeline(self):
-
-        inputBundle = pipeline.InputBundle(
-            device = self.logical_device,
-            swapchainImageFormat = self.swapchainFormat,
-            swapchainExtent = self.swapchainExtent,
-            vertexFilepath = "shaders/vert.spv",
-            fragmentFilepath = "shaders/frag.spv"
-        )
-
-        outputBundle = pipeline.create_graphics_pipeline(inputBundle, True)
-
-        self.pipelineLayout = outputBundle.pipelineLayout
-        self.renderpass = outputBundle.renderPass
-        self.pipeline = outputBundle.pipeline
     
-    def finalize_setup(self):
+    def create_framebuffers(self):
 
-        framebufferInput = framebuffer.framebufferInput()
-        framebufferInput.device = self.logical_device
-        framebufferInput.renderpass = self.renderpass
-        framebufferInput.swapchainExtent = self.swapchainExtent
-        framebuffer.make_framebuffers(
-            framebufferInput, self.swapchainFrames, True
-        )
+        for i, frame in enumerate(self.swapchain_bundle.frames):
+            attachments = [frame.image_view]
+            framebufferInfo = VkFramebufferCreateInfo(sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO, renderPass=self.pipeline_bundle.renderpass, attachmentCount=1, 
+                pAttachments=attachments, width=self.swapchain_bundle.extent.width, height=self.swapchain_bundle.extent.height,layers=1)
 
-        commandPoolInput = commands.commandPoolInputChunk()
-        commandPoolInput.device = self.logical_device
-        commandPoolInput.physicalDevice = self.physical_device
-        commandPoolInput.surface = self.vk_surface
-        commandPoolInput.instance = self.vk_instance
-        self.commandPool = commands.make_command_pool(
-            commandPoolInput, True
-        )
+            try:
+                frame.framebuffer = vkCreateFramebuffer(self.logical_device, framebufferInfo, None)
+            except:
+                print("ERROR: making Framebuffer!")
 
-        commandbufferInput = commands.commandbufferInputChunk()
-        commandbufferInput.device = self.logical_device
-        commandbufferInput.commandPool = self.commandPool
-        commandbufferInput.frames = self.swapchainFrames
-        self.mainCommandbuffer = commands.make_command_buffers(
-            commandbufferInput, True
-        )
+    def create_commandbuffers(self):
+        # Command Pool
+        pool_info = VkCommandPoolCreateInfo(self.queue_family_indices.graphics_family, flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT)
+        try:
+            self.command_pool = vkCreateCommandPool(self.logical_device, pool_info, None)
+        except:
+            print("ERROR:Failed to create command pool")
+            return 
 
-        self.inFlightFence = sync.make_fence(self.logical_device, True)
-        self.imageAvailable = sync.make_semaphore(self.logical_device, True)
-        self.renderFinished = sync.make_semaphore(self.logical_device, True)
+        # Command Buffers
+        allocInfo = VkCommandBufferAllocateInfo(commandPool = self.command_pool, level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, commandBufferCount = 1)
+        # for each frame
+        for i,frame in enumerate(self.swapchain_bundle.frames):
 
-    def record_draw_commands(self, commandBuffer, imageIndex):
+            try:
+                frame.commandbuffer = vkAllocateCommandBuffers(self.logical_device, allocInfo)[0]
+            except:
+                print("ERROR: Failed to allocate command buffer for frame")
 
-        beginInfo = VkCommandBufferBeginInfo()
+        # main
+        try:
+            self.main_commandbuffer = vkAllocateCommandBuffers(self.logical_device, allocInfo)[0]
+            
+        except:
+            print("ERROR: Failed to allocate main command buffer")
+
+    def create_sync_objects(self):
+
+        # Semaphores
+        semaphore_info = VkSemaphoreCreateInfo()
+        try:
+            self.image_available_semaphore = vkCreateSemaphore(self.logical_device, semaphore_info, None)
+            self.render_finished_semaphore = vkCreateSemaphore(self.logical_device, semaphore_info, None)
+        except:
+            print("Failed to create semaphore")
+        
+        # Fence
+        fence_info = VkFenceCreateInfo(flags = VK_FENCE_CREATE_SIGNALED_BIT)
+        try:
+            self.in_flight_fence =  vkCreateFence(self.logical_device, fence_info, None)
+        except:
+            print("Failed to create fence")
+
+    def record_draw_commands(self, command_buffer, image_index):
+
+        begin_info = VkCommandBufferBeginInfo()
 
         try:
-            vkBeginCommandBuffer(commandBuffer, beginInfo)
+            vkBeginCommandBuffer(command_buffer, begin_info)
         except:
             print("Failed to begin recording command buffer")
         
-        renderpassInfo = VkRenderPassBeginInfo(
-            renderPass = self.renderpass,
-            framebuffer = self.swapchainFrames[imageIndex].framebuffer,
-            renderArea = [[0,0], self.swapchainExtent]
-        )
+        renderpass_info = VkRenderPassBeginInfo(renderPass = self.pipeline_bundle.renderpass, framebuffer = self.swapchain_bundle.frames[image_index].framebuffer, 
+            renderArea = [[0,0], self.swapchain_bundle.extent])
         
-        clearColor = VkClearValue([[1.0, 0.5, 0.25, 1.0]])
-        renderpassInfo.clearValueCount = 1
-        renderpassInfo.pClearValues = ffi.addressof(clearColor)
+        clear_color = VkClearValue([[1.0, 0.5, 0.25, 1.0]])
+        renderpass_info.clearValueCount = 1
+        renderpass_info.pClearValues = ffi.addressof(clear_color)
         
-        vkCmdBeginRenderPass(commandBuffer, renderpassInfo, VK_SUBPASS_CONTENTS_INLINE)
-        
-        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline)
-        
-        vkCmdDraw(
-            commandBuffer = commandBuffer, vertexCount = 3, 
-            instanceCount = 1, firstVertex = 0, firstInstance = 0
-        )
-        
-        vkCmdEndRenderPass(commandBuffer)
+        vkCmdBeginRenderPass(command_buffer, renderpass_info, VK_SUBPASS_CONTENTS_INLINE)
+        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_bundle.pipeline)
+        vkCmdDraw(commandBuffer = command_buffer, vertexCount = 3, instanceCount = 1, firstVertex = 0, firstInstance = 0)
+        vkCmdEndRenderPass(command_buffer)
         
         try:
-            vkEndCommandBuffer(commandBuffer)
+            vkEndCommandBuffer(command_buffer)
         except:
             print("Failed to end recording command buffer")
     
     def render(self):
 
-        #grab instance procedures
+        vkWaitForFences(device = self.logical_device, fenceCount = 1, pFences = [self.in_flight_fence,], waitAll = VK_TRUE, timeout = 1000000000)
+        vkResetFences(device = self.logical_device, fenceCount = 1, pFences = [self.in_flight_fence,])
+
+        # Get next image 
         vkAcquireNextImageKHR = vkGetDeviceProcAddr(self.logical_device, 'vkAcquireNextImageKHR')
-        vkQueuePresentKHR = vkGetDeviceProcAddr(self.logical_device, 'vkQueuePresentKHR')
+        image_index = vkAcquireNextImageKHR(device = self.logical_device, swapchain = self.swapchain_bundle.swapchain, timeout = 1000000000, semaphore = self.image_available_semaphore, 
+            fence = VK_NULL_HANDLE)
 
-        vkWaitForFences(
-            device = self.logical_device, fenceCount = 1, pFences = [self.inFlightFence,], 
-            waitAll = VK_TRUE, timeout = 1000000000
-        )
-        vkResetFences(
-            device = self.logical_device, fenceCount = 1, pFences = [self.inFlightFence,]
-        )
+        # Setup command buffer from intended swapchain image
+        command_buffer = self.swapchain_bundle.frames[image_index].commandbuffer
+        vkResetCommandBuffer(commandBuffer = command_buffer, flags = 0)
 
-        imageIndex = vkAcquireNextImageKHR(
-            device = self.logical_device, swapchain = self.swapchain, timeout = 1000000000, 
-            semaphore = self.imageAvailable, fence = VK_NULL_HANDLE
-        )
+        # Record Draw Command
+        self.record_draw_commands(command_buffer, image_index)
 
-        commandBuffer = self.swapchainFrames[imageIndex].commandbuffer
-        vkResetCommandBuffer(commandBuffer = commandBuffer, flags = 0)
-        self.record_draw_commands(commandBuffer, imageIndex)
-
-        submitInfo = VkSubmitInfo(
-            waitSemaphoreCount = 1, pWaitSemaphores = [self.imageAvailable,], 
-            pWaitDstStageMask=[VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,],
-            commandBufferCount = 1, pCommandBuffers = [commandBuffer,], signalSemaphoreCount = 1,
-            pSignalSemaphores = [self.renderFinished,]
-        )
-
+        # Submit command to queue
+        submit_info = VkSubmitInfo(waitSemaphoreCount = 1, pWaitSemaphores = [self.image_available_semaphore,], pWaitDstStageMask=[VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,],
+            commandBufferCount = 1, pCommandBuffers = [command_buffer,], signalSemaphoreCount = 1, pSignalSemaphores = [self.render_finished_semaphore,])
         try:
-            vkQueueSubmit(
-                queue = self.graphics_queue, submitCount = 1, 
-                pSubmits = submitInfo, fence = self.inFlightFence
-            )
+            vkQueueSubmit(queue = self.graphics_queue, submitCount = 1, pSubmits = submit_info, fence = self.in_flight_fence)
         except:
             print("Failed to submit draw commands")
         
-        presentInfo = VkPresentInfoKHR(
-            waitSemaphoreCount = 1, pWaitSemaphores = [self.renderFinished,],
-            swapchainCount = 1, pSwapchains = [self.swapchain,],
-            pImageIndices = [imageIndex,]
-        )
-        vkQueuePresentKHR(self.present_queue, presentInfo)
+        # Present
+        present_info = VkPresentInfoKHR(waitSemaphoreCount = 1, pWaitSemaphores = [self.render_finished_semaphore,], swapchainCount = 1, pSwapchains = [self.swapchain_bundle.swapchain,],
+            pImageIndices = [image_index,])
+        vkQueuePresentKHR = vkGetDeviceProcAddr(self.logical_device, 'vkQueuePresentKHR')
+        vkQueuePresentKHR(self.present_queue, present_info)
 
     def engine_close(self):
 
+        # Wait for processes that may still be running, before freeing up memory
         vkDeviceWaitIdle(self.logical_device)
 
+        print("ENGINE CLOSING!")
+
+        vkDestroyFence(self.logical_device, self.in_flight_fence, None)
+        vkDestroySemaphore(self.logical_device, self.image_available_semaphore, None)
+        vkDestroySemaphore(self.logical_device, self.render_finished_semaphore, None)
+
+        vkDestroyCommandPool(self.logical_device, self.command_pool, None)
+
+        vkDestroyPipeline(self.logical_device, self.pipeline_bundle.pipeline, None)
+        vkDestroyPipelineLayout(self.logical_device, self.pipeline_bundle.pipeline_layout, None)
+        vkDestroyRenderPass(self.logical_device, self.pipeline_bundle.renderpass, None)
         
-        print("ENGINE CLOSING!\n")
-
-        vkDestroyFence(self.logical_device, self.inFlightFence, None)
-        vkDestroySemaphore(self.logical_device, self.imageAvailable, None)
-        vkDestroySemaphore(self.logical_device, self.renderFinished, None)
-
-        vkDestroyCommandPool(self.logical_device, self.commandPool, None)
-
-        vkDestroyPipeline(self.logical_device, self.pipeline, None)
-        vkDestroyPipelineLayout(self.logical_device, self.pipelineLayout, None)
-        vkDestroyRenderPass(self.logical_device, self.renderpass, None)
-        
-        for frame in self.swapchainFrames:
+        for frame in self.swapchain_bundle.frames:
             vkDestroyImageView(
                 device = self.logical_device, imageView = frame.image_view, pAllocator = None
             )
@@ -309,18 +297,16 @@ class Program:
                 device = self.logical_device, framebuffer = frame.framebuffer, pAllocator = None
             )
         
-        destructionFunction = vkGetDeviceProcAddr(self.logical_device, 'vkDestroySwapchainKHR')
-        destructionFunction(self.logical_device, self.swapchain, None)
-        vkDestroyDevice(
-            device = self.logical_device, pAllocator = None
-        )
+        DestroySwapchain = vkGetDeviceProcAddr(self.logical_device, 'vkDestroySwapchainKHR')
+        DestroySwapchain(self.logical_device, self.swapchain_bundle.swapchain, None)
+
+        vkDestroyDevice(device = self.logical_device, pAllocator = None)
         
-        destructionFunction = vkGetInstanceProcAddr(self.vk_instance, "vkDestroySurfaceKHR")
-        destructionFunction(self.vk_instance, self.vk_surface, None)
+        DestroySurface = vkGetInstanceProcAddr(self.vk_instance, "vkDestroySurfaceKHR")
+        DestroySurface(self.vk_instance, self.vk_surface, None)
 
         vkDestroyInstance(self.vk_instance, None)
 
-	    #terminate glfw
         glfw.terminate()
 
     def run(self):
@@ -330,21 +316,6 @@ class Program:
             glfw.poll_events() 
 
             self.render()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 #MAIN ENTRY POINT   
