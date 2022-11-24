@@ -25,9 +25,10 @@ class Program:
         self.swapchain_bundle = None
         self.pipeline_bundle = None
         self.command_pool = None
-        self.main_commandbuffer = None
         self.image_available_semaphore = None
         self.render_finished_semaphore = None
+
+        # Create a window
         self.build_glfw_window(self.window_width, self.window_height)
 
         # Makes a Vulkan Instance, similar to an OpenGL Context
@@ -174,7 +175,8 @@ class Program:
 
     def create_commandbuffers(self):
         # Command Pool
-        pool_info = VkCommandPoolCreateInfo(self.queue_family_indices.graphics_family, flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT)
+        pool_info = VkCommandPoolCreateInfo(sType=VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, 
+            queueFamilyIndex=self.queue_family_indices.graphics_family)
         try:
             self.command_pool = vkCreateCommandPool(self.logical_device, pool_info, None)
         except:
@@ -182,7 +184,8 @@ class Program:
             return 
 
         # Command Buffers
-        allocInfo = VkCommandBufferAllocateInfo(commandPool = self.command_pool, level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, commandBufferCount = 1)
+        allocInfo = VkCommandBufferAllocateInfo(sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, commandPool=self.command_pool, level=VK_COMMAND_BUFFER_LEVEL_PRIMARY, 
+            commandBufferCount=1)
         # for each frame
         for i,frame in enumerate(self.swapchain_bundle.frames):
 
@@ -190,13 +193,6 @@ class Program:
                 frame.commandbuffer = vkAllocateCommandBuffers(self.logical_device, allocInfo)[0]
             except:
                 print("ERROR: Failed to allocate command buffer for frame")
-
-        # main
-        try:
-            self.main_commandbuffer = vkAllocateCommandBuffers(self.logical_device, allocInfo)[0]
-            
-        except:
-            print("ERROR: Failed to allocate main command buffer")
 
     def create_sync_objects(self):
 
@@ -208,7 +204,7 @@ class Program:
         except:
             print("Failed to create semaphore")
         
-        # Fence
+        # Fence. VK_FENCE_CREATE_SIGNALED_BIT is used so that the fence is created in a signal stage, allowing flow of execution to pass in the first frame
         fence_info = VkFenceCreateInfo(flags = VK_FENCE_CREATE_SIGNALED_BIT)
         try:
             self.in_flight_fence =  vkCreateFence(self.logical_device, fence_info, None)
@@ -217,25 +213,31 @@ class Program:
 
     def record_draw_commands(self, command_buffer, image_index):
 
-        begin_info = VkCommandBufferBeginInfo()
-
+        # Start recording
+        begin_info = VkCommandBufferBeginInfo(sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO)
         try:
             vkBeginCommandBuffer(command_buffer, begin_info)
         except:
             print("Failed to begin recording command buffer")
         
-        renderpass_info = VkRenderPassBeginInfo(renderPass = self.pipeline_bundle.renderpass, framebuffer = self.swapchain_bundle.frames[image_index].framebuffer, 
-            renderArea = [[0,0], self.swapchain_bundle.extent])
-        
+        # Set render pass info to later create an instance
+        renderpass_info = VkRenderPassBeginInfo(sType=VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, renderPass=self.pipeline_bundle.renderpass, 
+            framebuffer=self.swapchain_bundle.frames[image_index].framebuffer, renderArea = [[0,0], self.swapchain_bundle.extent])
+        # Defining clear values to be used by VK_ATTACHMENT_LOAD_OP_CLEAR, which will be used as load operation for the color attachment
         clear_color = VkClearValue([[1.0, 0.5, 0.25, 1.0]])
         renderpass_info.clearValueCount = 1
         renderpass_info.pClearValues = ffi.addressof(clear_color)
         
+        # Begin render pass instance
         vkCmdBeginRenderPass(command_buffer, renderpass_info, VK_SUBPASS_CONTENTS_INLINE)
+        # Bind pipeline
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_bundle.pipeline)
-        vkCmdDraw(commandBuffer = command_buffer, vertexCount = 3, instanceCount = 1, firstVertex = 0, firstInstance = 0)
+        # Actual draw command
+        vkCmdDraw(command_buffer, 3,  1,  0, 0)
+        # End render pass instance
         vkCmdEndRenderPass(command_buffer)
         
+        # End recording
         try:
             vkEndCommandBuffer(command_buffer)
         except:
@@ -277,7 +279,7 @@ class Program:
         # Wait for processes that may still be running, before freeing up memory
         vkDeviceWaitIdle(self.logical_device)
 
-        print("ENGINE CLOSING!")
+        print("ENGINE CLOSE")
 
         vkDestroyFence(self.logical_device, self.in_flight_fence, None)
         vkDestroySemaphore(self.logical_device, self.image_available_semaphore, None)
@@ -312,7 +314,7 @@ class Program:
     def run(self):
         while not glfw.window_should_close(self.window):
 
-            # Needs to be called in order to be able to interact with window buttons
+            # Needs to be called in order to be able to interact with window buttons, such as the close button
             glfw.poll_events() 
 
             self.render()

@@ -54,7 +54,7 @@ def create_swapchain(instance, logicalDevice, physicalDevice, surface, width, he
     extent.height = min(my_bundle.surface_capabilites.maxImageExtent.height,max(my_bundle.surface_capabilites.minImageExtent.height, extent.height))
     my_bundle.extent = extent
 
-    # Additional info setup for swapchain creation
+    # Additional info setup for swapchain creation. In our case, the families should be the same
     if (queue_indices.graphics_family != queue_indices.present_family):
         img_sharing_mode = VK_SHARING_MODE_CONCURRENT
         queue_family_index_count = 2
