@@ -1,6 +1,6 @@
 # Vulkan Hello Triangle
 <p align="justify">
- Project meant as a starting point to anyone looking to get into Vulkan, with commented code and a <code>Follow Along</code> guide with further explanations. As a bonus, a similar setup is done through OpenGL in the <code>HelloTriangleOGL.py</code> file, in order to compare both approaches as well as set a reference point to someone that might already be familiar with the latter API. Being a Python project, there are some requirements that need to be installed though. 
+ Project meant as a starting point to anyone looking to get into Vulkan, with commented code and a <code>FollowAlongGuide.pdf</code> with further explanations. As a bonus, a similar setup is done through OpenGL in the <code>HelloTriangleOGL.py</code> file, in order to compare both approaches as well as set a reference point to someone that might already be familiar with the latter API. Being a Python project, there are some requirements that need to be installed though. 
 </p>
 
 ## Requirements
